@@ -1,0 +1,571 @@
+{
+  "name": "Creator Meme - Form and Quality Loop",
+  "nodes": [
+    {
+      "id": "enter-meme-topic",
+      "name": "Enter meme topic",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "formTitle": "Generate a meme",
+        "formDescription": "Enter any topic. The finished meme will be offered as a download.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Topic",
+              "fieldName": "topic",
+              "fieldType": "text",
+              "placeholder": "For example: Monday meetings",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "buttonLabel": "Generate meme",
+          "path": "creator-meme",
+          "respondWithOptions": {
+            "values": {
+              "respondWith": "text",
+              "formSubmittedText": "Your request was accepted. Open this workflow in n8n, then open Executions and download the file from the final node when the run finishes."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "config-and-input",
+      "name": "Config and input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const topic=String($json.topic||$json.Topic||'').trim();if(!topic)throw new Error('Enter a topic.');const cfg={max_attempts:3,bar_audience:80};return [{json:{topic,cfg,attempt:0,best:null,used_ids:[]}}];"
+      }
+    },
+    {
+      "id": "assemble-meme-prompt",
+      "name": "Assemble meme prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const base={...$json};const all=[{id:'354700819',name:'Two guys on a bus',boxes:2,roles:'happy bright side; sad reality'},{id:'284929871',name:'They dont know',boxes:2,roles:'private confident thought; unseen truth'},{id:'99683372',name:'Sleeping Shaq',boxes:2,roles:'boring thing; exciting thing'},{id:'178591752',name:'Tuxedo Winnie the Pooh',boxes:2,roles:'plain phrase; fancy phrasing of same idea'},{id:'252600902',name:'Always Has Been',boxes:2,roles:'surprising realization; always has been'},{id:'222403160',name:'Bernie asking',boxes:2,roles:'I am once again asking; what is requested'},{id:'4087833',name:'Waiting Skeleton',boxes:2,roles:'what is being awaited; long wait punchline'},{id:'148909805',name:'Monkey Puppet',boxes:2,roles:'awkward setup; guilty reaction'},{id:'309868304',name:'Trade Offer',boxes:3,roles:'I receive; You receive; trade offer'},{id:'180190441',name:'Same Picture',boxes:3,roles:'first thing; second thing; same picture'},{id:'533936279',name:'Bell Curve',boxes:3,roles:'simple take; overcomplicated take; simple take again'}];let pool=all.filter(t=>!base.used_ids.includes(t.id));if(pool.length<3)pool=all;pool.sort(()=>Math.random()-.5);base.shortlist=pool.slice(0,5);const menu=base.shortlist.map((t,i)=>(i+1)+'. '+t.name+' ('+t.boxes+' boxes): '+t.roles).join('\\n');base.briefPrompt='Write one genuinely funny, specific and shareable meme on topic: '+base.topic+'\\nChoose the best template from:\\n'+menu+'\\nReturn STRICT JSON only: {\"choice\":1,\"boxes\":[\"short line\",\"short line\"],\"caption\":\"short social caption\"}. Use exactly the selected number of boxes. Keep every line under 45 characters, one coherent setup and punchline. No hate, slurs or explicit content. Revision feedback: '+(base.revision_note||'none');return [{json:base}];"
+      }
+    },
+    {
+      "id": "orchestrator-deepseek",
+      "name": "Orchestrator - DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"deepseek-v4-pro\",thinking:{type:\"disabled\"},messages:[{role:\"user\",content:$json.briefPrompt}],response_format:{type:\"json_object\"},max_tokens:350}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "parse-meme",
+      "name": "Parse meme",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const base={...$('Assemble meme prompt').item.json};const text=$json.choices?.[0]?.message?.content||'';let p;try{p=JSON.parse(text)}catch{p={}}const tpl=base.shortlist[Number(p.choice)-1]||base.shortlist[0];const boxes=Array.isArray(p.boxes)?p.boxes.map(x=>String(x||'').trim().slice(0,70)).slice(0,tpl.boxes):[];base.template_id=tpl.id;base.template_name=tpl.name;base.box_count=tpl.boxes;base.used_ids=[...base.used_ids,tpl.id];base.boxes=boxes;base.caption=String(p.caption||'');base.boxes_ok=boxes.length===tpl.boxes&&boxes.every(x=>x.length>0&&x.length<=70);return [{json:base}];"
+      }
+    },
+    {
+      "id": "build-caption-request",
+      "name": "Build caption request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};const parts=['template_id='+encodeURIComponent(b.template_id),'max_font_size=46'];b.boxes.forEach((x,i)=>parts.push('boxes['+i+'][text]='+encodeURIComponent(x)));b.imgflip_body=parts.join('&');return [{json:b}];"
+      }
+    },
+    {
+      "id": "caption-on-imgflip",
+      "name": "Caption on Imgflip",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.imgflip.com/caption_image",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/x-www-form-urlencoded",
+        "body": "={{ $json.imgflip_body }}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "extract-meme-url",
+      "name": "Extract meme URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const base={...$('Build caption request').item.json};base.image_url=$json.success===true?$json.data?.url:null;base.gen_error=$json.error_message||null;return [{json:base}];"
+      }
+    },
+    {
+      "id": "l1-lint",
+      "name": "L1 Lint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};const issues=[];if(!b.boxes_ok)issues.push('incomplete or overly long captions');if(!b.image_url)issues.push(b.gen_error||'Imgflip returned no image');b.lint={pass:issues.length===0,issues};return [{json:b}];"
+      }
+    },
+    {
+      "id": "image-ok-",
+      "name": "Image OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Image OK?-condition",
+              "leftValue": "={{ $json.lint.pass }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "assemble-audience-prompt",
+      "name": "Assemble audience prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};b.audiencePrompt='Judge this meme strictly for an ordinary audience. Topic: '+b.topic+'. Template: '+b.template_name+'. Captions: '+b.boxes.join(' | ')+'. Score 0-100 with weight relatability 30, actual humor and surprise 30, template fit 20, clarity 10, shareability 10. Generic or confusing jokes score below 70. Return STRICT JSON only: {\"score\":75,\"fixes\":[\"specific suggestion\"]}.';return [{json:b}];"
+      }
+    },
+    {
+      "id": "l4-audience-judge-deepseek",
+      "name": "L4 Audience judge - DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"deepseek-v4-pro\",thinking:{type:\"disabled\"},messages:[{role:\"user\",content:$json.audiencePrompt}],response_format:{type:\"json_object\"},max_tokens:250}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "collect-scores",
+      "name": "Collect scores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('Assemble audience prompt').item.json};let r;try{r=JSON.parse($json.choices?.[0]?.message?.content||'')}catch{r={}}b.audienceScore=Math.max(0,Math.min(100,Number(r.score)||0));b.audience_fixes=Array.isArray(r.fixes)?r.fixes:[];return [{json:b}];"
+      }
+    },
+    {
+      "id": "no-image-collect",
+      "name": "No image collect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('L1 Lint').item.json};b.audienceScore=0;b.audience_fixes=['Render a complete, readable image.'];return [{json:b}];"
+      }
+    },
+    {
+      "id": "gate-and-best-attempt",
+      "name": "Gate and best attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};const attempt=(b.attempt||0)+1;const score=Number(b.audienceScore)||0;const passNow=b.lint.pass&&score>=b.cfg.bar_audience;const snapshot={score,attempt,image_url:b.image_url,boxes:b.boxes,template_name:b.template_name,caption:b.caption};let best=b.best;if(b.lint.pass&&b.image_url&&(!best||score>best.score))best=snapshot;const final=passNow||attempt>=b.cfg.max_attempts;const fixes=[...(b.lint.issues||[]),...(b.audience_fixes||[])];return [{json:{...b,attempt,best,passNow,final,fixes,revision_note:fixes.join('; ')}}];"
+      }
+    },
+    {
+      "id": "final-",
+      "name": "Final?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Final?-condition",
+              "leftValue": "={{ $json.final }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "apply-revision",
+      "name": "Apply revision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        460
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{...$json}}];"
+      }
+    },
+    {
+      "id": "select-best-meme",
+      "name": "Select best meme",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const b=$json;const chosen=b.passNow?{image_url:b.image_url,score:b.audienceScore,boxes:b.boxes,template_name:b.template_name,caption:b.caption}:b.best;if(!chosen?.image_url)throw new Error('No meme was rendered after all attempts. Check Imgflip credentials or provider error.');return [{json:{topic:b.topic,image_url:chosen.image_url,score:chosen.score,attempts:b.attempt,status:b.passNow?'approved':'review',boxes:chosen.boxes,template:chosen.template_name,caption:chosen.caption}}];"
+      }
+    },
+    {
+      "id": "download-selected-meme",
+      "name": "Download selected meme",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        180
+      ],
+      "parameters": {
+        "url": "={{ $json.image_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Enter meme topic": {
+      "main": [
+        [
+          {
+            "node": "Config and input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config and input": {
+      "main": [
+        [
+          {
+            "node": "Assemble meme prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble meme prompt": {
+      "main": [
+        [
+          {
+            "node": "Orchestrator - DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orchestrator - DeepSeek": {
+      "main": [
+        [
+          {
+            "node": "Parse meme",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse meme": {
+      "main": [
+        [
+          {
+            "node": "Build caption request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build caption request": {
+      "main": [
+        [
+          {
+            "node": "Caption on Imgflip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Caption on Imgflip": {
+      "main": [
+        [
+          {
+            "node": "Extract meme URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract meme URL": {
+      "main": [
+        [
+          {
+            "node": "L1 Lint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L1 Lint": {
+      "main": [
+        [
+          {
+            "node": "Image OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image OK?": {
+      "main": [
+        [
+          {
+            "node": "Assemble audience prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No image collect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble audience prompt": {
+      "main": [
+        [
+          {
+            "node": "L4 Audience judge - DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L4 Audience judge - DeepSeek": {
+      "main": [
+        [
+          {
+            "node": "Collect scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect scores": {
+      "main": [
+        [
+          {
+            "node": "Gate and best attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No image collect": {
+      "main": [
+        [
+          {
+            "node": "Gate and best attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate and best attempt": {
+      "main": [
+        [
+          {
+            "node": "Final?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final?": {
+      "main": [
+        [
+          {
+            "node": "Select best meme",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply revision": {
+      "main": [
+        [
+          {
+            "node": "Assemble meme prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select best meme": {
+      "main": [
+        [
+          {
+            "node": "Download selected meme",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download selected meme": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

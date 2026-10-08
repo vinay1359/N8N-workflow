@@ -1,0 +1,1066 @@
+{
+  "name": "Creator Video - Form and Quality Loop",
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Video topic form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        280
+      ],
+      "parameters": {
+        "formTitle": "Generate a video meme",
+        "formDescription": "Enter any topic. The finished MP4 will be offered as a download.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Topic",
+              "fieldName": "topic",
+              "fieldType": "text",
+              "placeholder": "For example: Monday meetings",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "buttonLabel": "Generate video",
+          "path": "creator-video",
+          "respondWithOptions": {
+            "values": {
+              "respondWith": "text",
+              "formSubmittedText": "Your request was accepted. Open this workflow in n8n, then open Executions and download the file from the final node when the run finishes."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "enter-video-topic",
+      "name": "Validate topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const topic=String($json.topic||$json.Topic||'').trim();if(!topic)throw new Error('Enter a topic.');return [{json:{topic}}];"
+      }
+    },
+    {
+      "id": "prepare-video-prompt",
+      "name": "Prepare video prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const prompt='Plan a funny, clear 5-second vertical 9:16 meme video about: '+$json.topic+'. Return JSON only with keys hook (maximum 6 words), line (one brief punchline), motion_prompt (moving background only; NO text or letters). The hook and line must fit a short video. Avoid copyrighted characters, hate, and explicit content.';return [{json:{topic:$json.topic,prompt}}];"
+      }
+    },
+    {
+      "id": "plan-with-deepseek",
+      "name": "Plan with DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"deepseek-v4-pro\",thinking:{type:\"disabled\"},messages:[{role:\"user\",content:$json.prompt}],response_format:{type:\"json_object\"},max_tokens:350}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "check-video-plan",
+      "name": "Check video plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const content=$json.choices?.[0]?.message?.content;if(!content)throw new Error('DeepSeek returned no plan.');let p;try{p=JSON.parse(content)}catch{throw new Error('DeepSeek returned invalid JSON.')}if(!p.hook||!p.line||!p.motion_prompt)throw new Error('Video plan is incomplete.');return [{json:{topic:$('Prepare video prompt').item.json.topic,plan:{hook:String(p.hook).slice(0,60),line:String(p.line).slice(0,90),motion_prompt:String(p.motion_prompt)},attempt:0,best:null}}];"
+      }
+    },
+    {
+      "id": "submit-motion-to-fal",
+      "name": "Submit motion to fal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://queue.fal.run/fal-ai/kling-video/v2.6/pro/text-to-video",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({prompt:$json.plan.motion_prompt,duration:\"5\",aspect_ratio:\"9:16\",generate_audio:false}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "start-motion-wait",
+      "name": "Start motion wait",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const prior=$('Prep motion submit').item.json;if(!$json.status_url||!$json.response_url)throw new Error('fal did not return queue URLs.');return [{json:{...prior,status_url:$json.status_url,response_url:$json.response_url,motion_polls:0}}];"
+      }
+    },
+    {
+      "id": "wait-for-motion",
+      "name": "Wait for motion",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        280
+      ],
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "poll-motion",
+      "name": "Poll motion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        280
+      ],
+      "parameters": {
+        "url": "={{ $json.status_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "check-motion-status",
+      "name": "Check motion status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const prior=$('Wait for motion').item.json;const status=$json.status;if(status==='FAILED')throw new Error('fal video generation failed: '+JSON.stringify($json));const polls=(prior.motion_polls||0)+1;if(polls>=40&&status!=='COMPLETED')throw new Error('fal motion timed out after 20 minutes.');return [{json:{...prior,motion_polls:polls,motion_done:status==='COMPLETED'}}];"
+      }
+    },
+    {
+      "id": "motion-ready-",
+      "name": "Motion ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Motion ready?-condition",
+              "leftValue": "={{ $json.motion_done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "get-motion-result",
+      "name": "Get motion result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        160
+      ],
+      "parameters": {
+        "url": "={{ $json.response_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "check-motion-file",
+      "name": "Check motion file",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const url=$json.video?.url;if(!url)throw new Error('fal returned no video URL.');return [{json:{...$('Check motion status').item.json,motion_url:url}}];"
+      }
+    },
+    {
+      "id": "build-video-overlay",
+      "name": "Build video overlay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const p=$json.plan;const elements=[{type:'video',source:$json.motion_url,fit:'cover',volume:0},{type:'text',text:p.hook,time:0,duration:2.5,y:'16%',width:'88%',x_alignment:'50%',font_family:'Montserrat',font_weight:'800',font_size:'7vh',fill_color:'#FFFFFF',stroke_color:'#000000',stroke_width:'0.6vh'},{type:'text',text:p.line,time:2.5,duration:2.5,y:'72%',width:'88%',x_alignment:'50%',font_family:'Montserrat',font_weight:'800',font_size:'6vh',fill_color:'#FFFFFF',stroke_color:'#000000',stroke_width:'0.6vh'}];return [{json:{...$json,source:{output_format:'mp4',width:1080,height:1920,duration:5,elements}}}];"
+      }
+    },
+    {
+      "id": "render-overlay-with-creatomate",
+      "name": "Render overlay with Creatomate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3080,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.creatomate.com/v2/renders",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.source) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "start-render-wait",
+      "name": "Start render wait",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r=Array.isArray($json)?$json[0]:$json;if(!r?.id)throw new Error('Creatomate did not return a render ID.');if(r.status==='failed')throw new Error('Creatomate render failed: '+(r.error_message||'unknown'));return [{json:{...$('Build video overlay').item.json,render_id:r.id,render_url:r.url||null,render_status:r.status||'planned',snapshot_url:r.snapshot_url||null,render_polls:0}}];"
+      }
+    },
+    {
+      "id": "wait-for-render",
+      "name": "Wait for render",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3520,
+        160
+      ],
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "poll-render",
+      "name": "Poll render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3740,
+        160
+      ],
+      "parameters": {
+        "url": "={{ \"https://api.creatomate.com/v2/renders/\" + $json.render_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "check-render-status",
+      "name": "Check render status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const prior=$('Wait for render').item.json;const r=Array.isArray($json)?$json[0]:$json;if(r.status==='failed')throw new Error('Creatomate render failed: '+(r.error_message||'unknown'));const polls=(prior.render_polls||0)+1;if(polls>=40&&r.status!=='succeeded')throw new Error('Creatomate timed out after 10 minutes.');return [{json:{...prior,render_polls:polls,render_status:r.status,render_url:r.url||prior.render_url,snapshot_url:r.snapshot_url||prior.snapshot_url,render_done:r.status==='succeeded'}}];"
+      }
+    },
+    {
+      "id": "render-ready-",
+      "name": "Render ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Render ready?-condition",
+              "leftValue": "={{ $json.render_done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "check-video-url",
+      "name": "Check video URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        40
+      ],
+      "parameters": {
+        "jsCode": "if(!$json.render_url)throw new Error('Completed render has no video URL.');return [{json:{...$json,video_url:$json.render_url}}];"
+      }
+    },
+    {
+      "id": "download-video-here",
+      "name": "Download video here",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4620,
+        40
+      ],
+      "parameters": {
+        "url": "={{ $json.video_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "prep-motion-submit",
+      "name": "Prep motion submit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        990,
+        280
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{...$json}}];"
+      }
+    },
+    {
+      "id": "l1-lint",
+      "name": "L1 Lint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4620,
+        40
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};const issues=[];if(!b.video_url)issues.push('no rendered MP4');if(!b.plan?.hook||!b.plan?.line)issues.push('missing on-screen text');b.lint={pass:issues.length===0,issues};return [{json:b}];"
+      }
+    },
+    {
+      "id": "snapshot-available-",
+      "name": "Snapshot available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4840,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Snapshot available?-condition",
+              "leftValue": "={{ !!$json.snapshot_url }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "l3-visual-judge-openai",
+      "name": "L3 Visual judge - OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5060,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"gpt-4o-mini\",messages:[{role:\"system\",content:\"Judge this vertical meme video snapshot for visual clarity, readable text, and topic fit. Score 0-100 and give concrete fixes. Return JSON only with score and fixes fields.\"},{role:\"user\",content:[{type:\"text\",text:\"Topic: \"+$json.topic+\". Hook: \"+$json.plan.hook+\". Punchline: \"+$json.plan.line},{type:\"image_url\",image_url:{url:$json.snapshot_url}}]}],response_format:{type:\"json_object\"},max_tokens:250}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "parse-visual-judge",
+      "name": "Parse visual judge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5280,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('L1 Lint').item.json};let r;try{r=JSON.parse($json.choices?.[0]?.message?.content||'')}catch{r={}}b.visual={score:Math.max(0,Math.min(100,Number(r.score)||0)),fixes:Array.isArray(r.fixes)?r.fixes:[]};return [{json:b}];"
+      }
+    },
+    {
+      "id": "no-snapshot-score",
+      "name": "No snapshot score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5060,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('L1 Lint').item.json};b.visual={score:0,fixes:['Creatomate returned no snapshot for visual review']};return [{json:b}];"
+      }
+    },
+    {
+      "id": "assemble-audience-prompt",
+      "name": "Assemble audience prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5500,
+        40
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};b.audiencePrompt='Judge a 5-second video meme for ordinary viewers. Topic: '+b.topic+'. Hook: '+b.plan.hook+'. Punchline: '+b.plan.line+'. Score 0-100 for clear, specific humor, compelling hook, relevance, and shareability. Give concrete fixes. Return STRICT JSON only: {\"score\":75,\"fixes\":[\"...\"]}.';return [{json:b}];"
+      }
+    },
+    {
+      "id": "l4-audience-judge-deepseek",
+      "name": "L4 Audience judge - DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5720,
+        40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"deepseek-v4-pro\",thinking:{type:\"disabled\"},messages:[{role:\"user\",content:$json.audiencePrompt}],response_format:{type:\"json_object\"},max_tokens:250}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "gate-and-best-video",
+      "name": "Gate and best video",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5940,
+        40
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('Assemble audience prompt').item.json};let a;try{a=JSON.parse($json.choices?.[0]?.message?.content||'')}catch{a={}}const audience=Math.max(0,Math.min(100,Number(a.score)||0));const visual=b.visual?.score||0;const score=Math.min(visual,audience);const attempt=(b.attempt||0)+1;const passNow=b.lint.pass&&visual>=68&&audience>=66;const snap={video_url:b.video_url,snapshot_url:b.snapshot_url,score,visual,audience,attempt,plan:b.plan};let best=b.best;if(b.video_url&&(!best||score>best.score))best=snap;const fixes=[...(b.lint.issues||[]),...(b.visual?.fixes||[]),...(Array.isArray(a.fixes)?a.fixes:[])];return [{json:{...b,attempt,best,score,audience,passNow,final:passNow||attempt>=2,fixes}}];"
+      }
+    },
+    {
+      "id": "final-quality-decision-",
+      "name": "Final quality decision?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6160,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "Final quality decision?-condition",
+              "leftValue": "={{ $json.final }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "assemble-improver-prompt",
+      "name": "Assemble improver prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6380,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const b={...$json};b.improverPrompt='This video meme failed quality review. Problems: '+b.fixes.join('; ')+'. Topic: '+b.topic+'. Current motion prompt: '+b.plan.motion_prompt+'. Return STRICT JSON only: {\"motion_prompt\":\"revised moving scene with NO text or letters\",\"hook\":\"shorter or stronger hook\",\"line\":\"shorter or funnier punchline\"}. Make a visibly different, more specific scene.';return [{json:b}];"
+      }
+    },
+    {
+      "id": "prompt-improver-deepseek",
+      "name": "Prompt improver - DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6600,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:\"deepseek-v4-pro\",thinking:{type:\"disabled\"},messages:[{role:\"user\",content:$json.improverPrompt}],response_format:{type:\"json_object\"},max_tokens:350}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "apply-revision",
+      "name": "Apply revision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6820,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const b={...$('Assemble improver prompt').item.json};let p;try{p=JSON.parse($json.choices?.[0]?.message?.content||'')}catch{p={}}b.plan={...b.plan,motion_prompt:String(p.motion_prompt||b.plan.motion_prompt),hook:String(p.hook||b.plan.hook).slice(0,60),line:String(p.line||b.plan.line).slice(0,90)};return [{json:b}];"
+      }
+    },
+    {
+      "id": "select-best-video",
+      "name": "Select best video",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6380,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const b=$json;const chosen=b.passNow?{video_url:b.video_url,score:b.score,visual:b.visual.score,audience:b.audience,plan:b.plan}:b.best;if(!chosen?.video_url)throw new Error('No completed video after both attempts.');return [{json:{topic:b.topic,video_url:chosen.video_url,score:chosen.score,visual:chosen.visual,audience:chosen.audience,attempts:b.attempt,status:b.passNow?'approved':'review',plan:chosen.plan}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Prepare video prompt": {
+      "main": [
+        [
+          {
+            "node": "Plan with DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan with DeepSeek": {
+      "main": [
+        [
+          {
+            "node": "Check video plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check video plan": {
+      "main": [
+        [
+          {
+            "node": "Prep motion submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit motion to fal": {
+      "main": [
+        [
+          {
+            "node": "Start motion wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start motion wait": {
+      "main": [
+        [
+          {
+            "node": "Wait for motion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for motion": {
+      "main": [
+        [
+          {
+            "node": "Poll motion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll motion": {
+      "main": [
+        [
+          {
+            "node": "Check motion status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check motion status": {
+      "main": [
+        [
+          {
+            "node": "Motion ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Motion ready?": {
+      "main": [
+        [
+          {
+            "node": "Get motion result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait for motion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get motion result": {
+      "main": [
+        [
+          {
+            "node": "Check motion file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check motion file": {
+      "main": [
+        [
+          {
+            "node": "Build video overlay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build video overlay": {
+      "main": [
+        [
+          {
+            "node": "Render overlay with Creatomate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render overlay with Creatomate": {
+      "main": [
+        [
+          {
+            "node": "Start render wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start render wait": {
+      "main": [
+        [
+          {
+            "node": "Wait for render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for render": {
+      "main": [
+        [
+          {
+            "node": "Poll render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll render": {
+      "main": [
+        [
+          {
+            "node": "Check render status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check render status": {
+      "main": [
+        [
+          {
+            "node": "Render ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render ready?": {
+      "main": [
+        [
+          {
+            "node": "Check video URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait for render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check video URL": {
+      "main": [
+        [
+          {
+            "node": "L1 Lint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Video topic form": {
+      "main": [
+        [
+          {
+            "node": "Validate topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate topic": {
+      "main": [
+        [
+          {
+            "node": "Prepare video prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep motion submit": {
+      "main": [
+        [
+          {
+            "node": "Submit motion to fal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L1 Lint": {
+      "main": [
+        [
+          {
+            "node": "Snapshot available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snapshot available?": {
+      "main": [
+        [
+          {
+            "node": "L3 Visual judge - OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No snapshot score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L3 Visual judge - OpenAI": {
+      "main": [
+        [
+          {
+            "node": "Parse visual judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse visual judge": {
+      "main": [
+        [
+          {
+            "node": "Assemble audience prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No snapshot score": {
+      "main": [
+        [
+          {
+            "node": "Assemble audience prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble audience prompt": {
+      "main": [
+        [
+          {
+            "node": "L4 Audience judge - DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L4 Audience judge - DeepSeek": {
+      "main": [
+        [
+          {
+            "node": "Gate and best video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate and best video": {
+      "main": [
+        [
+          {
+            "node": "Final quality decision?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final quality decision?": {
+      "main": [
+        [
+          {
+            "node": "Select best video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Assemble improver prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble improver prompt": {
+      "main": [
+        [
+          {
+            "node": "Prompt improver - DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt improver - DeepSeek": {
+      "main": [
+        [
+          {
+            "node": "Apply revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply revision": {
+      "main": [
+        [
+          {
+            "node": "Prep motion submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select best video": {
+      "main": [
+        [
+          {
+            "node": "Download video here",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download video here": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
